@@ -1,0 +1,5 @@
+# Track only ECE454-Lab2/implementation.c for now.
+*
+!*/
+!.gitignore
+!ECE454-Lab2/implementation.c
