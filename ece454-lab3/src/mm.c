@@ -172,13 +172,13 @@ enum bin_maxes {
   **********************************************************/
  int mm_init(void)
  {
-	 uintptr_t init_heap_size = bin_512_max*DSIZE + 2*WSIZE;
+	 uintptr_t init_heap_size = 2*WSIZE;
  
 	 if ((heap_listp = mem_sbrk(init_heap_size)) == (void *)-1)
 		 return -1;
  
 	 PUT(heap_listp, PACK(0, 1));                         // sentry to indicate allocated and size zero
-	 PUT(heap_listp +init_heap_size-WSIZE, PACK(0, 1));    // sentry to indicate allocated and size zero
+	 PUT(heap_listp + WSIZE, PACK(0, 3));    // sentry to indicate allocated and size zero
  
 	 heap_listp += WSIZE; // skip the header sentry
  
@@ -186,15 +186,15 @@ enum bin_maxes {
 		 g_mem_tracker.bin_pointers[bin_idx] = 0;
 	 }
  
-	 // set 512 head to start of current heap
-	 g_mem_tracker.bin_pointers[bin_512] = heap_listp;
-	 // set size and allocated bit for current and previous block
-	 PUT(heap_listp, PACK(bin_512_max*DSIZE, 2)); // bit 1 indicates prev block is allocated
-	 // set next and prev pointers
-	 PUT(heap_listp + WSIZE, 0);
-	 PUT(heap_listp + 2*WSIZE, 0);
-	 PUT(heap_listp + bin_512_max*DSIZE - WSIZE, PACK(bin_512_max*DSIZE, 2)); // free blocks keep a footer
-	 available_dw = bin_512_max;
+	// set 512 head to start of current heap
+	//  g_mem_tracker.bin_pointers[bin_512] = heap_listp;
+	//  // set size and allocated bit for current and previous block
+	//  PUT(heap_listp, PACK(bin_512_max*DSIZE, 2)); // bit 1 indicates prev block is allocated
+	//  // set next and prev pointers
+	//  PUT(heap_listp + WSIZE, 0);
+	//  PUT(heap_listp + 2*WSIZE, 0);
+	//  PUT(heap_listp + bin_512_max*DSIZE - WSIZE, PACK(bin_512_max*DSIZE, 2)); // free blocks keep a footer
+	 available_dw = 0;
  
 	 return 0;
  }
@@ -327,25 +327,25 @@ enum bin_maxes {
  
  void *extend_heap(size_t words)
  {
-	 char *bp;
-	 size_t size;
+	char *bp;
+	size_t size;
  
-	 /* Allocate an even number of words to maintain alignments */
-	 size = (words % 2) ? (words+1) * WSIZE : words * WSIZE;
-	 if ( (bp = mem_sbrk(size)) == (void *)-1 )
-		 return NULL;
+	/* Allocate an even number of words to maintain alignments */
+	size = (words % 2) ? (words+1) * WSIZE : words * WSIZE;
+	if ( (bp = mem_sbrk(size)) == (void *)-1 )
+		return NULL;
  
-	 /* Initialize free block header/footer and the epilogue header */
-	 // read old epilogue
-	 bp = bp - WSIZE;
-	 uintptr_t ep_tag = GET_TAGS(bp) & ~0b1; // clear allocated bit
-	 PUT(bp, PACK(size, ep_tag));                // free block header
-	 PUT(bp+size-WSIZE, PACK(size, ep_tag));                // free block footer
-	 PUT(bp+size, PACK(0, 1));        // new epilogue header
-	 available_dw += size/DSIZE;
+	/* Initialize free block header/footer and the epilogue header */
+	// read old epilogue
+	bp = bp - WSIZE;
+	uintptr_t ep_tag = GET_TAGS(bp) & ~0b1; // clear allocated bit
+	PUT(bp, PACK(size, ep_tag));                // free block header
+	PUT(bp+size-WSIZE, PACK(size, ep_tag));                // free block footer
+	PUT(bp+size, PACK(0, 1));        // new epilogue header
+	available_dw += size/DSIZE;
  
-	 /* Coalesce if the previous block was free */
-     return coalesce(bp, false, NULL, NULL, false);
+	/* Coalesce if the previous block was free */
+	return coalesce(bp, false, NULL, NULL, false);
  }
  
  void insert_in_free(char * block) 
@@ -419,6 +419,29 @@ void * find_fit(size_t asize)
 	 
 	return free_block;
 }
+
+char * extend(size_t asize) {
+	char * bp;
+	size_t extendsize = MAX(asize, CHUNKSIZE);
+	char* heap_end = mem_heap_hi();
+	uintptr_t epilogue = GET(heap_end-(WSIZE-1));
+	uintptr_t tag = UNPACK_TAGS(epilogue);
+	if(tag & 0b10) {
+		if ((bp = extend_heap(extendsize*(DSIZE/WSIZE))) == NULL)
+			return NULL;
+	}
+	else {
+		char* last_bp = heap_end-(2*WSIZE-1);
+		uintptr_t last_ftr = GET(last_bp);
+		size_t size = UNPACK_SIZE(last_ftr);
+		char * last_hdr = (char*)(last_bp - size+ WSIZE);
+		size_t needed_size = asize - size/DSIZE;
+		if ((bp = extend_heap(needed_size*(DSIZE/WSIZE))) == NULL)
+			return NULL;
+		bp = last_hdr;
+	}
+	return bp;
+}
  
  /**********************************************************
   * place
@@ -431,6 +454,9 @@ void * find_fit(size_t asize)
    size_t bsize = UNPACK_SIZE(hdr)/DSIZE; 
    if(bsize >= (asize + 2)) { // check if the block size is larger than needed by more than 1 double word if so insert extra space back into free list
 	 uintptr_t extra_size = bsize - asize; // in double words
+	 
+
+
 	 char* extra_block = bp + (asize*DSIZE);
 	 // put header and footer for new unallocated block
 	 PUT(extra_block, PACK(extra_size*DSIZE, 2)); // put header, indicate previous block is allocated
@@ -494,17 +520,18 @@ void * find_fit(size_t asize)
 	/* Adjust block size to include overhead and alignment reqs. also convert to double word units */
 	asize = adjusted_size(size);
 
-	extendsize = MAX(asize, CHUNKSIZE);
 	if(asize > available_dw) { // wont fit
-		if ((bp = extend_heap(extendsize*(DSIZE/WSIZE))) == NULL)
+		bp = extend(asize);
+		if(bp == NULL)
 			return NULL;
 	}
 	else { // try to find a fit
 		bp = find_fit(asize);
 		if(bp == NULL) { // cant fit probably due to fragmentation
-			if((bp = extend_heap(extendsize*(DSIZE/WSIZE))) == NULL)
+			bp = extend(asize);
+			if(bp == NULL)
 				return NULL;
-		}
+		}	
 	}
 
 	/* Search the free list for a fit */
@@ -518,56 +545,74 @@ void * find_fit(size_t asize)
   *********************************************************/
  void *mm_realloc(void *ptr, size_t size)
  {
-	 /* If size == 0 then this is just free, and we return NULL. */
-	 /* If oldptr is NULL, then this is just malloc. */
-	 if (ptr == NULL) {
-		 return (mm_malloc(size));
-	 }
-	 
-	 if(size == 0){
-		 mm_free(ptr);
-		 return NULL;
-	 }
-	 
-	 char* old_bp = ptr-WSIZE;
-	 size_t asize = adjusted_size(size);
-	 
-     size_t old_had = GET(old_bp);
-     size_t old_size = UNPACK_SIZE(old_had);
-     size_t old_tag = UNPACK_TAGS(old_had);
+	/* If size == 0 then this is just free, and we return NULL. */
+	/* If oldptr is NULL, then this is just malloc. */
+	if (ptr == NULL) {
+		return (mm_malloc(size));
+	}
+	
+	if(size == 0){
+		mm_free(ptr);
+		return NULL;
+	}
+	
+	char* old_bp = ptr-WSIZE;
+	size_t asize = adjusted_size(size);
+	
+	size_t old_head = GET(old_bp);
+	size_t old_size = UNPACK_SIZE(old_head);
+	size_t old_tag = UNPACK_TAGS(old_head);
  
-	 if(asize == old_size/DSIZE) {
-		 return ptr;
-	 }
-	 else if(asize > old_size/DSIZE) { // larger allocation
-		 size_t coalesced_size;
-		 size_t forward_size;
-		 char* coalesced_bp = coalesce(old_bp, true, &coalesced_size, &forward_size, false);        
-		 
-		 if(coalesced_size >= asize*DSIZE){ // the new coalesced block is large enough
-			 coalesce(old_bp, false, NULL, NULL, true);
-			 if(coalesced_bp < old_bp){
-				 memmove(coalesced_bp+WSIZE, ptr, old_size-WSIZE);
-			 }
-			 place(coalesced_bp, asize);
-			 available_dw += old_size/DSIZE;
-			 return coalesced_bp+WSIZE;
-		 }
-		 else { // coalescing is not enough
-			 void *newptr = mm_malloc(size);
-			 if (newptr == NULL)
-				 return NULL;
- 
-			 memcpy(newptr, ptr, old_size-WSIZE);
-			 mm_free(ptr);
-			 return newptr;
-		 }
-	 }
-	 else { // smaller allocation
-		 place(old_bp, asize);
-		 available_dw += (old_size/DSIZE);
-		 return ptr;
-	 }
+	if(asize == old_size/DSIZE) {
+		return ptr;
+	}
+	else if(asize > old_size/DSIZE) { // larger allocation
+		size_t coalesced_size;
+		size_t forward_size;
+		size_t needed_size = asize - old_size/DSIZE;
+		char* coalesced_bp = coalesce(old_bp, true, &coalesced_size, &forward_size, false);        
+		
+		// see if we can extend the tail
+		char* next_bp = old_bp + old_size;
+		uintptr_t next_hdr = GET(next_bp);
+		size_t next_size = UNPACK_SIZE(next_hdr);
+		size_t next_tag = UNPACK_TAGS(next_hdr);
+		if(next_size == 0 || ((next_tag & 0b1) == 0 && GET_SIZE(next_bp+forward_size) == 0)) { 
+			if(needed_size > forward_size/DSIZE) {
+				size_t growth_amt = needed_size - forward_size/DSIZE;
+				char* res_bp = extend_heap(growth_amt*2);
+				if(res_bp != NULL){
+					size_t new_size= old_size+needed_size*DSIZE;
+					PUT(old_bp, PACK(new_size, old_tag));
+					char* new_fp = old_bp+new_size-WSIZE;
+					PUT(new_fp+WSIZE, PACK(0, 3));
+					available_dw -= forward_size/DSIZE + growth_amt;
+					return old_bp+WSIZE;
+				}
+			}
+		}
+		if(coalesced_size >= asize*DSIZE){ // the new coalesced block is large enough
+			coalesce(old_bp, false, NULL, NULL, true);
+			if(coalesced_bp < old_bp){
+				memmove(coalesced_bp+WSIZE, ptr, old_size-WSIZE);
+			}
+			place(coalesced_bp, asize);
+			available_dw += old_size/DSIZE;
+			return coalesced_bp+WSIZE;
+		}
+	}
+	else { // smaller allocation
+		place(old_bp, asize);
+		available_dw += (old_size/DSIZE);
+		return ptr;
+	}
+	void *newptr = mm_malloc(size);
+	if (newptr == NULL)
+		return NULL;
+
+	memcpy(newptr, ptr, old_size-WSIZE);
+	mm_free(ptr);
+	return newptr;
  }
  
 /**********************************************************
