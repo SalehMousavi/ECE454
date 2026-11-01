@@ -3,3 +3,4 @@
 !*/
 !.gitignore
 !ECE454-Lab2/implementation.c
+!ece454-lab3/src/mm.c

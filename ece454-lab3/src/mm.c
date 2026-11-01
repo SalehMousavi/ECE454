@@ -389,18 +389,24 @@ void * find_fit(size_t asize)
 	}
  
 	char * free_block = NULL;
+	uintptr_t best_fit = UINTPTR_MAX;
 	uintptr_t block_size = 0;
  
 	for(; bin_idx < bin_total; ++bin_idx) { // traverse the bins until we find a free block
 		// uintptr_t prev_node = NULL;
 		char * cur_block = g_mem_tracker.bin_pointers[bin_idx];
 		while(cur_block != NULL) { // iterate through the nodes in this bin
-		block_size = GET_SIZE(cur_block);
-		if(block_size >= (asize * DSIZE)) { // found a node with sufficient size
-			free_block = cur_block;
-			break;
-		}
-		cur_block = (char *)NEXT_BLKP(cur_block);
+			block_size = GET_SIZE(cur_block);
+			if(block_size >= (asize * DSIZE)) { // found a node with sufficient size
+				uintptr_t difference = block_size - asize * DSIZE;
+				if (best_fit > difference) {
+					best_fit =  difference;
+					free_block = cur_block;
+				}
+				if(difference == 0)
+					break;
+			}
+			cur_block = (char *)NEXT_BLKP(cur_block);
 		}
 		if(free_block != NULL) {
 			break;
@@ -477,33 +483,33 @@ void * find_fit(size_t asize)
   **********************************************************/
  void *mm_malloc(size_t size)
  {
-	 size_t asize; /* adjusted block size */
-	 size_t extendsize; /* amount to extend heap if no fit */
-	 char * bp;
- 
-	 /* Ignore spurious requests */
-	 if (size == 0)
-		 return NULL;
- 
-	 /* Adjust block size to include overhead and alignment reqs. also convert to double word units */
-	 asize = adjusted_size(size);
- 
-	 extendsize = MAX(asize, CHUNKSIZE);
-	 if(asize > available_dw) { // wont fit
-		 if ((bp = extend_heap(extendsize*(DSIZE/WSIZE))) == NULL)
-			 return NULL;
-	 }
-	 else { // try to find a fit
-		 bp = find_fit(asize);
-		 if(bp == NULL) { // cant fit probably due to fragmentation
-			 if((bp = extend_heap(extendsize*(DSIZE/WSIZE))) == NULL)
-				 return NULL;
-		 }
-	 }
- 
-	 /* Search the free list for a fit */
-	 place(bp, asize);
-	 return bp+WSIZE;
+	size_t asize; /* adjusted block size */
+	size_t extendsize; /* amount to extend heap if no fit */
+	char * bp;
+
+	/* Ignore spurious requests */
+	if (size == 0)
+		return NULL;
+
+	/* Adjust block size to include overhead and alignment reqs. also convert to double word units */
+	asize = adjusted_size(size);
+
+	extendsize = MAX(asize, CHUNKSIZE);
+	if(asize > available_dw) { // wont fit
+		if ((bp = extend_heap(extendsize*(DSIZE/WSIZE))) == NULL)
+			return NULL;
+	}
+	else { // try to find a fit
+		bp = find_fit(asize);
+		if(bp == NULL) { // cant fit probably due to fragmentation
+			if((bp = extend_heap(extendsize*(DSIZE/WSIZE))) == NULL)
+				return NULL;
+		}
+	}
+
+	/* Search the free list for a fit */
+	place(bp, asize);
+	return bp+WSIZE;
  }
  
  /**********************************************************
@@ -570,6 +576,6 @@ void * find_fit(size_t asize)
 * Return nonzero if the heap is consistant.
 *********************************************************/
 int mm_check(void){
-	return 1;
+	
 }
  
